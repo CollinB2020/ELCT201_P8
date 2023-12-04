@@ -5,7 +5,7 @@
  
 #include "pong.h"
  
-// Set the inputs and outputs
+// Set the inputs and outputs for the rgb_matrix header pins
 DigitalOut R1(PTC13);
 DigitalOut R2(PTC10);
 DigitalOut G1(PTC12);
@@ -24,11 +24,11 @@ DigitalOut LAT(PTC0);
 // GPIO port C instance
 volatile GPIO_TypeDef *GPIOC = reinterpret_cast<GPIO_TypeDef*>(GPIOC_BASE);
 
-void thread_function(){
+void rgb_matrix_function(){
 
-    // Sleep for 100 milliseconds to ensure that the pong simulation thread has
+    // Sleep for 10 milliseconds to ensure that the pong simulation thread has
     // allocated the ball and paddle structs and everything
-    thread_sleep_for(100);
+    thread_sleep_for(10);
 	 
 	// Clear 13 GPIOC bits being used except for OE'
     GPIOC->PCOR = 16381;
@@ -36,71 +36,77 @@ void thread_function(){
     // Counter used for generating rows
     uint32_t row = 0;
 
-    // Main thread loop
-    while (true) {
 
-        // Row%(HEIGHT_PX/2) is the current rgb matrix row being displayed. Row zero is the top row.
-        // Becasue the simulation uses an origin in the bottom left, the rows will have to be flipped.
-        // row_actual represents what the current reg matrix row is equivlent to in the simulation space.
-        uint8_t row_actual = HEIGHT_PX/2 - 1 - row%(HEIGHT_PX/2); // row_actual just flip 0,1,...2 to ...2,1,0
 
-        // Loop through every col in this row
-        for(int col = 0; col < WIDTH_PX; col++){
+    // Main thread loop. This loops scans over rows and columns to output one full screen per loop.
+    for (;;) {
 
-            // Display Left paddle pixels on the first column
-            if(col == 0){
-                ScopedLock<Mutex> lock(mtx); // Lock the mutex while accessing the paddle structs
 
-                // Check RGB1
-                if((row_actual >= leftPaddle->y_loc) & (row_actual <= leftPaddle->y_loc + PADDLE_HEIGHT - 1)){
-                    GPIOC->PSOR = (COLOR_GREEN << 8);
+        // The rgb matrix has 16 row select values. Each row select value displays 2 different rows. Row_counter counts from
+        // 0 to 16. Row_counter is used to generate two rows numbers, row_1 and row_2.
+        for(uint8_t row_counter = 0; row_counter < HEIGHT_PX/2; row_counter++){
+
+            uint8_t row_1 = row_counter; // First row in simulation space being displayed
+            uint8_t row_2 = row_counter + 16; // Second row in simulation space being displayed
+
+            // the rgb matrix indexes rows from top to bottom, so the row counter must be flipped
+            uint8_t row_out = HEIGHT_PX/2 - 1 - row_counter; 
+
+            // Loop through every col in this row
+            for(int col = 0; col < WIDTH_PX; col++){
+
+                // Checks if the current column is the leftmost column
+                if(col == 0){
+                    ScopedLock<Mutex> lock(mtx); // Lock the mutex while accessing the paddle structs
+
+                    // Check if row_simulation of RGB1 is occupied by paddle
+                    if((row_1 >= leftPaddle->y_idx) & (row_1 <= leftPaddle->y_idx + PADDLE_HEIGHT - 1)){
+                        GPIOC->PSOR = (COLOR_GREEN << 8);
+                    }
+
+                    // Check if row_select of RGB2 is occupied by paddle
+                    if((row_2 >= leftPaddle->y_idx) & (row_2 <= leftPaddle->y_idx + PADDLE_HEIGHT - 1)){
+                        GPIOC->PSOR = (COLOR_GREEN << 11);
+                    }
                 }
 
-                // Check RGB2
-                if((row_actual + 16 >= leftPaddle->y_loc) & (row_actual + 16 <= leftPaddle->y_loc + PADDLE_HEIGHT - 1)){
-                    GPIOC->PSOR = (COLOR_GREEN << 11);
+                // Checks if the current column is the rightmost column
+                if(col == WIDTH_PX - 1){
+                    ScopedLock<Mutex> lock(mtx); // Lock the mutex while accessing the paddle structs
+
+                    // Check the RGB1 row for the paddle
+                    if((row_1 >= rightPaddle->y_idx) & (row_1 <= rightPaddle->y_idx + PADDLE_HEIGHT - 1)){
+                        GPIOC->PSOR = (COLOR_GREEN << 8);
+                    }
+
+                    // Check the RGB2 row for the paddle
+                    if((row_2 >= rightPaddle->y_idx) & (row_2 <= rightPaddle->y_idx + PADDLE_HEIGHT - 1)){
+                        GPIOC->PSOR = (COLOR_GREEN << 11);
+                    }
                 }
-            }
 
-            // Display right paddle pixels on the last column
-            if(col == WIDTH_PX - 1){
-                ScopedLock<Mutex> lock(mtx); // Lock the mutex while accessing the paddle structs
 
-                // Check RGB1
-                if((row_actual >= rightPaddle->y_loc) & (row_actual <= rightPaddle->y_loc + PADDLE_HEIGHT - 1)){
-                    GPIOC->PSOR = (COLOR_GREEN << 8);
+                mtx.lock(); // Lock mutex while accessing shared variable ball
+
+                // Check the ball row against the row being displayed and write to the pixel if the ball exists there
+                if(row_1 == ball->y_int){ // RGB1
+                    if(col == ball->x_int) GPIOC->PSOR = (ball->color << 8);
                 }
 
-                // Check RGB2
-                if((row_actual + 16 >= rightPaddle->y_loc) & (row_actual + 16 <= rightPaddle->y_loc + PADDLE_HEIGHT - 1)){
-                    GPIOC->PSOR = (COLOR_GREEN << 11);
+                if(row_2 == ball->y_int){ // RGB2
+                    if(col == ball->x_int) GPIOC->PSOR = (ball->color << 11);
                 }
+
+                mtx.unlock();
+
+
+                GPIOC->PSOR = 4; // Set CLK high
+                GPIOC->PCOR = (7 << 11) | (7 << 8) | 4; // Clear CLK, RGB1, RGB2
             }
 
-            // Ball RGB2
-            if(row_actual == ball->y_int){ // RGB1
-                if(col == ball->x_int) GPIOC->PSOR = (ball->color << 8);
-            }
-
-            // Ball RGB1
-            if(row_actual + 16 == ball->y_int){ // RGB2
-                if(col == ball->x_int) GPIOC->PSOR = (ball->color << 11);
-            }
-
-            // Set CLK high
-            GPIOC->PSOR = 4;
-
-            // Clear CLK and RGB1, RGB2
-            GPIOC->PCOR = (7 << 11) | (7 << 8) | 4;
+            GPIOC->PSOR = 2; // OE LOW
+            GPIOC->PDOR = (row_out << 3) | 1; // Set row select and set LATCH
+            GPIOC->PCOR = 3; // set OE high and clear latch
         }
-
-        GPIOC->PSOR = 2; // OE LOW
-        GPIOC->PDOR = (row%(HEIGHT_PX/2) << 3) | 1; // Set row select and set LATCH
-
-        // Clear LATCH and set OE high
-        GPIOC->PCOR = 3;
-
-        // Increment to next row
-        row++;
     }
 }

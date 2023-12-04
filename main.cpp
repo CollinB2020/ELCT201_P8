@@ -9,17 +9,17 @@ int main()
 {
 
     // Create the pong simulation thread and start it
-    Thread thread1(osPriorityAboveNormal, 1152, NULL, "pong_simulation");
+    Thread thread1(osPriorityAboveNormal, 1024, NULL, "pong_simulation");
     thread1.start(simulate);
 
     // Create the rgb matrix thread and start it
     Thread thread(osPriorityAboveNormal, 512, NULL, "rgb_matrix");
-    thread.start(thread_function);
+    thread.start(rgb_matrix_function);
 
-    // Ensure the main thread does not exit prematurely
+    // Idle the main thread while other threads run
     while (true) {
         
         // Idle
-        ThisThread::sleep_for(UINT16_MAX);
+        thread_sleep_for(UINT8_MAX);
     }
 }
