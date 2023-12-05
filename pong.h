@@ -51,14 +51,15 @@ struct Paddle {
     uint8_t y_prev;
 };
 
-// 2D array of pixels values
-//extern uint8_t **rgb_matrix;
 
-extern Mutex mtx; // Declaration of the mutex
-
+// Shared variables between threads
+extern Mutex mtx;
 extern Ball *ball;
 extern Paddle *leftPaddle, *rightPaddle;
-
+extern uint16_t display_score; // 2 bytes for score: Most significant byte is the score for left side and vice versa
+                               // ***This variable doesn't hold the actual score. It holds the values that are currently being
+                               // displayed on screen (set to 0 when a point is in play)
+extern bool showPongText;
 
  /* Takes a floating point value in a floating point range and calculates a mapped integer value between
  * a new set of integer bounds */
@@ -99,6 +100,9 @@ void updateBallState();
  * This functions is meant to be called interally from simulation() function */
 void simulation_step();
 
+/* Read from the buttons and update booleans that represent states controlled by the buttons */
+void checkButtons();
+
 /* The function simulate() loops the simulation step function. This function is run in its own thread from main. 
  * The simulate function is the only function that needs to be run in order for the whole thread to run on its own*/
 void simulate();
@@ -119,6 +123,8 @@ void simulate();
 #define COLOR_TEAL COLOR_GREEN | COLOR_BLUE
 #define COLOR_MAGENTA COLOR_BLUE | COLOR_RED
 #define COLOR_WHITE COLOR_RED | COLOR_BLUE | COLOR_GREEN
+
+#define SCORE_COLOR COLOR_BLUE
 
 #define GPIOC_BASE      0x400FF080UL // GPIO port register addresses for Port C
 

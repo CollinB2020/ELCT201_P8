@@ -9,8 +9,20 @@ AnalogIn Left(PTB0);
 AnalogIn Right(PTB1);
 AnalogIn seed(PTB2);
 
-// States used by the simulation
-bool running = true;
+DigitalIn Reset(PTA1); // Reset button
+DigitalIn Pause(PTA2); // Pause/Play button
+DigitalIn PlayerChange(PTD4); // One/Two players
+
+bool measurePerformance_simulation = false;
+
+// Performance measuring
+float simulationPeriod = 0;
+uint16_t sampleSize = 1000;
+uint16_t sampleSizeCounter = 0;
+
+// boolean values to represent button controlled states
+bool running = false;
+bool paused = false;
 bool practiceMode = true;
 
 // Used for finding a change in time between screens
@@ -20,12 +32,16 @@ float current_time = 0.0;
 
 Timer timer;
 
-// Ball and paddle instances
+// Initialize shared variables
 Ball *ball;
 Paddle *leftPaddle, *rightPaddle;
-
-// Mutex used for accessing the shared variables
 Mutex mtx;
+uint16_t display_score = 0;
+bool showPongText = false;
+
+// Score variables
+uint8_t score_left = 0, score_right = 0;
+
 int mapValue_i(float x, float in_min, float in_max, int out_min, int out_max) { return static_cast<int>((x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min + 0.5); }
 
 float mapValue_f(float x, float in_min, float in_max, float out_min, float out_max) { return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min; }
@@ -40,16 +56,29 @@ void updatePaddlePositions(){
     leftPaddle->y_prev = leftPaddle->y_idx;
     rightPaddle->y_prev = rightPaddle->y_idx;
 
-    // Read the analog voltage from potentiometer and map between the minimum
-    // and maximum paddle positions [0, HEIGHT_PX - PADDLE_HEIGHT]. Store the 
-    // result to the paddle structs
-    leftPaddle->y_idx = mapValue_i(Left.read(), 0.0, 1.0, 0, HEIGHT_PX - PADDLE_HEIGHT);
-    
-    if(!practiceMode) rightPaddle->y_idx = mapValue_i(Right.read(), 0.0, 1.0, 0, HEIGHT_PX - PADDLE_HEIGHT);
-    else { 
-        int paddle_idx = ball->y_pos - (PADDLE_HEIGHT/2.0); // Find the y_loc desired to set the midpoint of the paddle horizontal to the ball
-        // Bound the paddle_idx between [0, HEIGHT_PX - PADDLE_HEIGHT]
-        rightPaddle->y_idx = paddle_idx < 0 ? 0 : (paddle_idx > (HEIGHT_PX - PADDLE_HEIGHT) ? (HEIGHT_PX - PADDLE_HEIGHT) : paddle_idx);
+    if(!running){
+
+    int leftPaddle_idx = ball->y_pos - (PADDLE_HEIGHT/2.0); // Find the y_loc desired to set the midpoint of the paddle horizontal to the ball
+    // Bound the paddle_idx between [0, HEIGHT_PX - PADDLE_HEIGHT]
+    leftPaddle->y_idx = leftPaddle_idx < 0 ? 0 : (leftPaddle_idx > (HEIGHT_PX - PADDLE_HEIGHT) ? (HEIGHT_PX - PADDLE_HEIGHT) : leftPaddle_idx);
+
+    int rightPaddle_idx = ball->y_pos - (PADDLE_HEIGHT/2.0); // Find the y_loc desired to set the midpoint of the paddle horizontal to the ball
+    // Bound the paddle_idx between [0, HEIGHT_PX - PADDLE_HEIGHT]
+    rightPaddle->y_idx = rightPaddle_idx < 0 ? 0 : (rightPaddle_idx > (HEIGHT_PX - PADDLE_HEIGHT) ? (HEIGHT_PX - PADDLE_HEIGHT) : rightPaddle_idx);
+
+    } else {
+
+        // Read the analog voltage from potentiometer and map between the minimum
+        // and maximum paddle positions [0, HEIGHT_PX - PADDLE_HEIGHT]. Store the 
+        // result to the paddle structs
+        leftPaddle->y_idx = mapValue_i(Left.read(), 0.0, 1.0, 0, HEIGHT_PX - PADDLE_HEIGHT);
+
+        if(!practiceMode) rightPaddle->y_idx = mapValue_i(Right.read(), 0.0, 1.0, 0, HEIGHT_PX - PADDLE_HEIGHT);
+        else { 
+            int paddle_idx = ball->y_pos - (PADDLE_HEIGHT/2.0); // Find the y_loc desired to set the midpoint of the paddle horizontal to the ball
+            // Bound the paddle_idx between [0, HEIGHT_PX - PADDLE_HEIGHT]
+            rightPaddle->y_idx = paddle_idx < 0 ? 0 : (paddle_idx > (HEIGHT_PX - PADDLE_HEIGHT) ? (HEIGHT_PX - PADDLE_HEIGHT) : paddle_idx);
+        }
     }
 }
 
@@ -75,8 +104,21 @@ void reset_point(uint16_t waitFor){
     // Stop the timer so there isn't a massive d_t meaured after sleeping
     timer.stop();
 
-    // Wait before resetting
-    thread_sleep_for(waitFor); 
+    // Flash the score on the screen 3 times
+    for(uint8_t i = 0; i < 3; i++){
+        mtx.lock();
+        display_score = (score_left << 8) | (score_right); // Show the scores
+        mtx.unlock();
+        // Wait before resetting
+        thread_sleep_for(5*waitFor/15); 
+        mtx.lock();
+        display_score = 0;
+        mtx.unlock();
+        // Wait before resetting
+        thread_sleep_for(waitFor/15); 
+    }
+
+    
 
     ScopedLock<Mutex> lock(mtx); // Lock mutex in this scope
 
@@ -119,7 +161,7 @@ void updateBallState(){
 
     // Collision detection for the top and bottom walls in the simulation
     if (ball->y_pos >= HEIGHT_PX) { // Top out of bounds collision
-        ball->y_pos = 2*HEIGHT_PX - ball->y_pos - 2;
+        ball->y_pos = 2*HEIGHT_PX - ball->y_pos;
         ball->y_slope *= -1;
     } else if (ball->y_pos <= 0) { // Bottom out of bounds collision
         ball->y_pos = abs(ball->y_pos);
@@ -149,6 +191,7 @@ void updateBallState(){
             ball->y_pos = y;
             ball->x_slope = ball->y_slope = 0;
             ball->color = COLOR_RED;
+            score_left++;
         }
     } else if (ball->x_pos <= 1) { // Left out of bounds
 
@@ -157,7 +200,7 @@ void updateBallState(){
 
         // Check if paddle is there
         if(y_idx <= (leftPaddle->y_idx + PADDLE_HEIGHT - 1) & y_idx >= leftPaddle->y_idx){ // Paddle is there
-            ball->x_pos = abs(ball->x_pos) + 1; // Move ball inbounds
+            ball->x_pos = 2 - ball->x_pos; // Move ball inbounds
 
             // Recaulculate the ball direction based on intercept location
             float v = vectorMagnitude(ball->x_slope, ball->y_slope);
@@ -172,6 +215,7 @@ void updateBallState(){
             ball->y_pos = y;
             ball->x_slope = ball->y_slope = 0;
             ball->color = COLOR_RED;
+            score_right++;
         }
     }
 
@@ -182,7 +226,7 @@ void updateBallState(){
     // Reset the point if the ball has a slope vector of 0. Unlock mutex before resetting, but after accessing ball in conditional.
     if(ball->x_slope == 0 & ball->y_slope == 0) {
         mtx.unlock();
-        reset_point(3000);
+        reset_point(5000);
     } else { mtx.unlock(); }
 }
 
@@ -193,13 +237,50 @@ void simulation_step(){
     d_t = current_time - prev_time;
     prev_time = current_time;
 
-    if(!running) return; // Don't step the simulator if the game is paused
+    simulationPeriod += d_t;
+    sampleSizeCounter++;
+    if (sampleSizeCounter >= sampleSize) { 
+        simulationPeriod /= sampleSizeCounter;
+        if(measurePerformance_simulation) { printf("\n\rAverage simulation time step period over %i samples: %f ms", sampleSize, simulationPeriod); }
+        sampleSizeCounter = simulationPeriod = 0;
+    }
+
+    mtx.lock();
+    showPongText = !running;
+    mtx.unlock();
+
+    checkButtons();
+
+    if(paused) return; // Don't step the simulator if the game is paused
 
     // Update the location of the paddles
     updatePaddlePositions();
 
     // Update the ball velocity, direction, position, and color
     updateBallState();
+}
+
+void checkButtons(){
+
+    if(!Reset.read()){ // Reset button
+        reset_point(0);
+        paused = false;
+        running = false;
+        practiceMode = true;
+        thread_sleep_for(200);
+    }
+
+    if(!Pause.read()) { 
+        running ? paused = !paused : running = true; 
+        timer.stop();
+        thread_sleep_for(200);
+        timer.start();
+    } // Pause/Play the game, or start the game if not running
+
+    if(!PlayerChange.read() & running) { 
+        practiceMode = !practiceMode; 
+        thread_sleep_for(200);
+    } // Player change button
 }
 
 void simulate(){
@@ -211,9 +292,6 @@ void simulate(){
         rnd_seed = (rnd_seed | ((1 << i) & bit));
     }
     srand(rnd_seed);
-	
-	// Begin the timer for time tracking
-	timer.start();
 
     mtx.lock(); // Lock Mutex while accessing ball struct
 
@@ -224,12 +302,15 @@ void simulate(){
     rightPaddle = (Paddle*) malloc(sizeof(Paddle));
 	
     mtx.unlock();
+
+    // Begin the timer for time tracking
+	timer.start();
     
     // Perform a point reset with a delay of 0
     reset_point(0);
 
 	// Main loop of this thread: 
-	while(true){
+	for(;;){
 
 		simulation_step();
 		

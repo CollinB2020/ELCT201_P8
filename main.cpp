@@ -9,11 +9,11 @@ int main()
 {
 
     // Create the pong simulation thread and start it
-    Thread thread1(osPriorityAboveNormal, 1024, NULL, "pong_simulation");
+    Thread thread1(osPriorityHigh, 1024, NULL, "pong_simulation");
     thread1.start(simulate);
 
     // Create the rgb matrix thread and start it
-    Thread thread(osPriorityAboveNormal, 512, NULL, "rgb_matrix");
+    Thread thread(osPriorityHigh, 1024, NULL, "rgb_matrix");
     thread.start(rgb_matrix_function);
 
     // Idle the main thread while other threads run
